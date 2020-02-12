@@ -5,3 +5,4 @@
  */
 
 export { agentConfigRouteService } from '../../../../common';
+export { epmRouteService } from '../../../../common';

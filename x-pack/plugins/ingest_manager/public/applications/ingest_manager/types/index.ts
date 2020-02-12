@@ -16,6 +16,7 @@ export {
   UpdateAgentConfigResponse,
   DeleteAgentConfigsRequestSchema,
   DeleteAgentConfigsResponse,
+  GetCategoriesResponse,
   // EPM types
   AssetReference,
   AssetsGroupedByServiceByType,

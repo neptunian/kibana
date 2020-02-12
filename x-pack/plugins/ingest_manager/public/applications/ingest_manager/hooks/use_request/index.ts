@@ -5,3 +5,4 @@
  */
 export { setHttpClient, sendRequest } from './use_request';
 export * from './agent_config';
+export * from './epm';
