@@ -19,6 +19,7 @@ export {
   // EPM types
   AssetsGroupedByServiceByType,
   AssetTypeToParts,
+  CategoryId,
   CategorySummaryItem,
   CategorySummaryList,
   KibanaAssetType,
