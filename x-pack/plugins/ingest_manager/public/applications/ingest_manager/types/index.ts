@@ -17,6 +17,7 @@ export {
   DeleteAgentConfigsRequestSchema,
   DeleteAgentConfigsResponse,
   // EPM types
+  AssetReference,
   AssetsGroupedByServiceByType,
   AssetType,
   AssetTypeToParts,
@@ -28,6 +29,7 @@ export {
   PackageInfo,
   PackageList,
   PackageListItem,
+  PackagesGroupedByStatus,
   RequirementsByServiceName,
   RequirementVersion,
   ScreenshotItem,
