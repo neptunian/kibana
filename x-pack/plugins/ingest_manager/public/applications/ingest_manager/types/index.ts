@@ -16,8 +16,6 @@ export {
   UpdateAgentConfigResponse,
   DeleteAgentConfigsRequestSchema,
   DeleteAgentConfigsResponse,
-  GetCategoriesResponse,
-  GetPackagesResponse,
   // EPM types
   AssetReference,
   AssetsGroupedByServiceByType,
@@ -36,6 +34,9 @@ export {
   RequirementVersion,
   ScreenshotItem,
   ServiceName,
+  GetCategoriesResponse,
+  GetPackagesResponse,
+  GetInfoResponse,
 } from '../../../../common';
 
 // Calling Object.entries(PackagesGroupedByStatus) gave `status: string`
