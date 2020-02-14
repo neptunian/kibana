@@ -37,6 +37,8 @@ export {
   GetCategoriesResponse,
   GetPackagesResponse,
   GetInfoResponse,
+  InstallPackageResponse,
+  DeletePackageResponse,
 } from '../../../../common';
 
 // Calling Object.entries(PackagesGroupedByStatus) gave `status: string`
