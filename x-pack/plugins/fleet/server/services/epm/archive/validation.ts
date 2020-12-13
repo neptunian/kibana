@@ -16,7 +16,7 @@ import {
   PackageSpecManifest,
 } from '../../../../common/types';
 import { PackageInvalidArchiveError } from '../../../errors';
-import { unpackBufferEntries } from './index';
+import { ArchiveEntry, unpackBufferEntries } from './index';
 import { pkgToPkgKey } from '../registry';
 
 const MANIFESTS: Record<string, Buffer> = {};
@@ -69,16 +69,23 @@ export async function parseAndVerifyArchiveBuffer(
   contentType: string
 ): Promise<{ paths: string[]; packageInfo: ArchivePackage }> {
   const entries = await unpackBufferEntries(archiveBuffer, contentType);
-  const paths: string[] = [];
-  entries.forEach(({ path, buffer }) => {
-    paths.push(path);
-    if (path.endsWith(MANIFEST_NAME) && buffer) MANIFESTS[path] = buffer;
-  });
+  return parseAndVerifyEntries(entries);
+}
 
+export function parseAndVerifyEntries(entries: ArchiveEntry[]) {
+  preloadManifests(entries);
+
+  const paths: string[] = entries.map(({ path }) => path);
   return {
     packageInfo: parseAndVerifyArchive(paths),
     paths,
   };
+}
+
+function preloadManifests(entries: ArchiveEntry[]) {
+  entries.forEach(({ path, buffer }) => {
+    if (path.endsWith(MANIFEST_NAME) && buffer) MANIFESTS[path] = buffer;
+  });
 }
 
 function parseAndVerifyArchive(paths: string[]): ArchivePackage {
@@ -97,29 +104,9 @@ function parseAndVerifyArchive(paths: string[]): ArchivePackage {
     throw new PackageInvalidArchiveError(`Package must contain a top-level ${MANIFEST_NAME} file.`);
   }
 
-  // ... which must be valid YAML
-  let manifest: ArchivePackage;
-  try {
-    manifest = yaml.load(manifestBuffer.toString());
-  } catch (error) {
-    throw new PackageInvalidArchiveError(`Could not parse top-level package manifest: ${error}.`);
-  }
-
-  // must have mandatory fields
-  const reqGiven = pick(manifest, requiredArchivePackageProps);
-  const requiredKeysMatch =
-    Object.keys(reqGiven).toString() === requiredArchivePackageProps.toString();
-  if (!requiredKeysMatch) {
-    const list = requiredArchivePackageProps.join(', ');
-    throw new PackageInvalidArchiveError(
-      `Invalid top-level package manifest: one or more fields missing of ${list}`
-    );
-  }
-
-  // at least have all required properties
-  // get optional values and combine into one object for the remaining operations
-  const optGiven = pick(manifest, optionalArchivePackageProps);
-  const parsed: ArchivePackage = { ...reqGiven, ...optGiven };
+  // load & parse the file
+  const manifest = loadYamlManifest(manifestBuffer);
+  const parsed: ArchivePackage = parsePackageManifest(manifest);
 
   // Package name and version from the manifest must match those from the toplevel directory
   const pkgKey = pkgToPkgKey({ name: parsed.name, version: parsed.version });
@@ -129,9 +116,9 @@ function parseAndVerifyArchive(paths: string[]): ArchivePackage {
     );
   }
 
+  // Add any properties not present in the manifest
   parsed.data_streams = parseAndVerifyDataStreams(paths, parsed.name, parsed.version);
-  parsed.policy_templates = parseAndVerifyPolicyTemplates(manifest);
-  // add readme if exists
+  parsed.policy_templates = parseAndVerifyPolicyTemplates(parsed);
   const readme = parseAndVerifyReadme(paths, parsed.name, parsed.version);
   if (readme) {
     parsed.readme = readme;
@@ -139,12 +126,49 @@ function parseAndVerifyArchive(paths: string[]): ArchivePackage {
 
   return parsed;
 }
+
+// at least has all required properties
+// include any allowed optional properties
+// ignore unknown properties
+function parsePackageManifest(manifest: ArchivePackage) {
+  const reqGiven = manifestHasRequiredFields(manifest);
+  const optGiven = pick(manifest, optionalArchivePackageProps);
+  const parsed: ArchivePackage = { ...reqGiven, ...optGiven };
+
+  return parsed;
+}
+
+function manifestHasRequiredFields(manifest: ArchivePackage) {
+  const reqGiven = pick(manifest, requiredArchivePackageProps);
+  const requiredKeysMatch =
+    Object.keys(reqGiven).toString() === requiredArchivePackageProps.toString();
+  if (!requiredKeysMatch) {
+    const list = requiredArchivePackageProps.join(', ');
+    throw new PackageInvalidArchiveError(
+      `Invalid top-level package manifest: one or more fields missing of ${list}`
+    );
+  }
+  return reqGiven;
+}
+
+// is present & valid YAML
+function loadYamlManifest(given: Buffer | string): ArchivePackage {
+  let manifest;
+  try {
+    manifest = yaml.load(given.toString());
+  } catch (error) {
+    throw new PackageInvalidArchiveError(`Could not parse top-level package manifest: ${error}.`);
+  }
+  return manifest;
+}
+
 function parseAndVerifyReadme(paths: string[], pkgName: string, pkgVersion: string): string | null {
   const readmeRelPath = `/docs/README.md`;
   const readmePath = `${pkgName}-${pkgVersion}${readmeRelPath}`;
   return paths.includes(readmePath) ? `/package/${pkgName}/${pkgVersion}${readmeRelPath}` : null;
 }
-export function parseAndVerifyDataStreams(
+
+function parseAndVerifyDataStreams(
   paths: string[],
   pkgName: string,
   pkgVersion: string
@@ -190,9 +214,9 @@ export function parseAndVerifyDataStreams(
       type,
       dataset,
     } = manifest;
-    if (!(dataStreamTitle && release && type)) {
+    if (!dataStreamTitle) {
       throw new PackageInvalidArchiveError(
-        `Invalid manifest for data stream '${dataStreamPath}': one or more fields missing of 'title', 'release', 'type'`
+        `Invalid manifest for data stream '${dataStreamPath}': one or more fields missing of 'title'`
       );
     }
     const streams = parseAndVerifyStreams(manifest, dataStreamPath);
@@ -212,7 +236,8 @@ export function parseAndVerifyDataStreams(
 
   return dataStreams;
 }
-export function parseAndVerifyStreams(manifest: any, dataStreamPath: string): RegistryStream[] {
+
+function parseAndVerifyStreams(manifest: any, dataStreamPath: string): RegistryStream[] {
   const streams: RegistryStream[] = [];
   const manifestStreams = manifest.streams;
   if (manifestStreams && manifestStreams.length > 0) {
@@ -244,7 +269,7 @@ export function parseAndVerifyStreams(manifest: any, dataStreamPath: string): Re
   }
   return streams;
 }
-export function parseAndVerifyVars(manifestVars: any[], location: string): RegistryVarsEntry[] {
+function parseAndVerifyVars(manifestVars: any[], location: string): RegistryVarsEntry[] {
   const vars: RegistryVarsEntry[] = [];
   if (manifestVars && manifestVars.length > 0) {
     manifestVars.forEach((manifestVar) => {
@@ -279,9 +304,7 @@ export function parseAndVerifyVars(manifestVars: any[], location: string): Regis
   }
   return vars;
 }
-export function parseAndVerifyPolicyTemplates(
-  manifest: PackageSpecManifest
-): RegistryPolicyTemplate[] {
+function parseAndVerifyPolicyTemplates(manifest: PackageSpecManifest): RegistryPolicyTemplate[] {
   const policyTemplates: RegistryPolicyTemplate[] = [];
   const manifestPolicyTemplates = manifest.policy_templates;
   if (manifestPolicyTemplates && manifestPolicyTemplates.length > 0) {
@@ -312,7 +335,7 @@ export function parseAndVerifyPolicyTemplates(
   }
   return policyTemplates;
 }
-export function parseAndVerifyInputs(manifestInputs: any, location: string): RegistryInput[] {
+function parseAndVerifyInputs(manifestInputs: any, location: string): RegistryInput[] {
   const inputs: RegistryInput[] = [];
   if (manifestInputs && manifestInputs.length > 0) {
     manifestInputs.forEach((input: any) => {

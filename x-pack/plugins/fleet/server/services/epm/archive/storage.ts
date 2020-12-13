@@ -5,26 +5,18 @@
  */
 
 import { extname } from 'path';
-import { uniq } from 'lodash';
-import yaml from 'js-yaml';
 import { isBinaryFile } from 'isbinaryfile';
 import mime from 'mime-types';
 import uuidv5 from 'uuid/v5';
-import {
-  SavedObjectsClientContract,
-  SavedObjectsBulkCreateObject,
-  SavedObjectsBulkGetObject,
-} from 'src/core/server';
+import { SavedObjectsClientContract, SavedObjectsBulkCreateObject } from 'src/core/server';
 import {
   ASSETS_SAVED_OBJECT_TYPE,
   InstallablePackage,
   InstallSource,
   PackageAssetReference,
-  RegistryDataStream,
 } from '../../../../common';
-import { getArchiveEntry } from './index';
-import { parseAndVerifyPolicyTemplates, parseAndVerifyStreams } from './validation';
-import { pkgToPkgKey } from '../registry';
+import { ArchiveEntry, getArchiveEntry, setArchiveEntry } from './index';
+import { parseAndVerifyEntries } from './validation';
 
 // could be anything, picked this from https://github.com/elastic/elastic-agent-client/issues/17
 const MAX_ES_ASSET_BYTES = 4 * 1024 * 1024;
@@ -147,89 +139,40 @@ export async function getAsset(opts: {
 
   return storedAsset;
 }
-export const getEsPackage = async (
-  pkgName: string,
-  pkgVersion: string,
-  packageAssets: SavedObjectsBulkGetObject[],
-  savedObjectsClient: SavedObjectsClientContract
-) => {
-  const pkgKey = pkgToPkgKey({ name: pkgName, version: pkgVersion });
-  const soRes = await savedObjectsClient.bulkGet<PackageAsset>(packageAssets);
-  const paths = soRes.saved_objects.map((asset) => asset.attributes.asset_path);
 
-  // create the packageInfo
-  // TODO: this is mostly copied from validtion.ts, but we should save packageInfo somewhere
-  // so we don't need to do this again as this was already done either in registry or through upload
+export async function getAssetsFromReferences(opts: {
+  savedObjectsClient: SavedObjectsClientContract;
+  references: PackageAssetReference[];
+}): Promise<PackageAsset[]> {
+  const { savedObjectsClient, references } = opts;
+  const bulkRes = await savedObjectsClient.bulkGet<PackageAsset>(references);
+  return bulkRes.saved_objects.map((so) => so.attributes);
+}
 
-  const manifestPath = `${pkgName}-${pkgVersion}/manifest.yml`;
-  const soResManifest = await savedObjectsClient.find<PackageAsset>({
-    type: ASSETS_SAVED_OBJECT_TYPE,
-    perPage: 1,
-    page: 1,
-    filter: `${ASSETS_SAVED_OBJECT_TYPE}.attributes.package_name:${pkgName} AND ${ASSETS_SAVED_OBJECT_TYPE}.attributes.package_version:${pkgVersion} AND ${ASSETS_SAVED_OBJECT_TYPE}.attributes.asset_path:${manifestPath}`,
-  });
-  const packageInfo = yaml.load(soResManifest.saved_objects[0].attributes.data_utf8);
+export function packageAssetToArchiveEntry(asset: PackageAsset): ArchiveEntry {
+  const { asset_path: path, data_utf8: utf8, data_base64: base64 } = asset;
+  const buffer = utf8 ? Buffer.from(utf8, 'utf8') : Buffer.from(base64, 'base64');
 
-  const readmePath = `${pkgName}-${pkgVersion}/docs/README.md`;
-  const readmeRes = await savedObjectsClient.find<PackageAsset>({
-    type: ASSETS_SAVED_OBJECT_TYPE,
-    perPage: 1,
-    page: 1,
-    filter: `${ASSETS_SAVED_OBJECT_TYPE}.attributes.package_name:${pkgName} AND ${ASSETS_SAVED_OBJECT_TYPE}.attributes.package_version:${pkgVersion} AND ${ASSETS_SAVED_OBJECT_TYPE}.attributes.asset_path:${readmePath}`,
-  });
-  if (readmeRes.total > 0) {
-    packageInfo.readme = `package/${readmePath}`;
-  }
-
-  let dataStreamPaths: string[] = [];
-  const dataStreams: RegistryDataStream[] = [];
-  paths
-    .filter((path) => path.startsWith(`${pkgKey}/data_stream/`))
-    .forEach((path) => {
-      const parts = path.split('/');
-      if (parts.length > 2 && parts[2]) dataStreamPaths.push(parts[2]);
-    });
-
-  dataStreamPaths = uniq(dataStreamPaths);
-
-  await Promise.all(
-    dataStreamPaths.map(async (dataStreamPath) => {
-      const dataStreamManifestPath = `${pkgKey}/data_stream/${dataStreamPath}/manifest.yml`;
-      const soResDataStreamManifest = await savedObjectsClient.find<PackageAsset>({
-        type: ASSETS_SAVED_OBJECT_TYPE,
-        perPage: 1,
-        page: 1,
-        filter: `${ASSETS_SAVED_OBJECT_TYPE}.attributes.package_name:${pkgName} AND ${ASSETS_SAVED_OBJECT_TYPE}.attributes.package_version:${pkgVersion} AND ${ASSETS_SAVED_OBJECT_TYPE}.attributes.asset_path:${dataStreamManifestPath}`,
-      });
-      const dataStreamManifest = yaml.load(
-        soResDataStreamManifest.saved_objects[0].attributes.data_utf8
-      );
-
-      const {
-        title: dataStreamTitle,
-        release,
-        ingest_pipeline: ingestPipeline,
-        type,
-        dataset,
-      } = dataStreamManifest;
-      const streams = parseAndVerifyStreams(dataStreamManifest, dataStreamPath);
-
-      dataStreams.push({
-        dataset: dataset || `${pkgName}.${dataStreamPath}`,
-        title: dataStreamTitle,
-        release,
-        package: pkgName,
-        ingest_pipeline: ingestPipeline || 'default',
-        path: dataStreamPath,
-        type,
-        streams,
-      });
-    })
-  );
-  packageInfo.policy_templates = parseAndVerifyPolicyTemplates(packageInfo);
-  packageInfo.data_streams = dataStreams;
   return {
-    paths,
-    packageInfo,
+    path,
+    buffer,
   };
-};
+}
+
+export async function getEsPackage(opts: {
+  references: PackageAssetReference[];
+  savedObjectsClient: SavedObjectsClientContract;
+}) {
+  const { references, savedObjectsClient } = opts;
+  const assets = await getAssetsFromReferences({ references, savedObjectsClient });
+  const entries: ArchiveEntry[] = assets.map(packageAssetToArchiveEntry);
+  const packageResponse = parseAndVerifyEntries(entries);
+
+  entries.forEach(({ path, buffer }) => {
+    if (path && buffer) {
+      setArchiveEntry(path, buffer);
+    }
+  });
+
+  return packageResponse;
+}
