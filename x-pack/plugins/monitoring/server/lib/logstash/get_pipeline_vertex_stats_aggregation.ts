@@ -236,17 +236,21 @@ export function getPipelineVertexStatsAggregation({
   });
 
   const config = req.server.config();
+  const maxBucketSize = Number(config.get('monitoring.ui.max_bucket_size'));
 
-  return fetchPipelineVertexTimeSeriesStats({
-    query,
-    logstashIndexPattern,
-    pipelineId,
-    version,
-    vertexId,
-    timeSeriesIntervalInSeconds,
-    // @ts-ignore not undefined, need to get correct config
-    maxBucketSize: config.get('monitoring.ui.max_bucket_size'),
-    callWithRequest,
-    req,
-  });
+  if (isNaN(maxBucketSize)) {
+    return Promise.reject('monitoring.ui.max_bucket_size was not a number in kibana configuration');
+  } else {
+    return fetchPipelineVertexTimeSeriesStats({
+      query,
+      logstashIndexPattern,
+      pipelineId,
+      version,
+      vertexId,
+      timeSeriesIntervalInSeconds,
+      maxBucketSize,
+      callWithRequest,
+      req,
+    });
+  }
 }
