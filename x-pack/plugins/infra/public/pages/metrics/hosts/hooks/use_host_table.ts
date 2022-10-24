@@ -7,19 +7,21 @@
 
 import { last } from 'lodash';
 import { useMemo } from 'react';
-import type { SnapshotNode, SnapshotNodeMetric } from '../../../../../common/http_api';
-import { HostMetics } from '../components/hosts_table_columns';
+import { SnapshotNode } from '../../../../../common/http_api';
+import { HostMetics, HostNodeRow } from '../components/hosts_table_columns';
 
-type MappedMetrics = Record<keyof HostMetics, SnapshotNodeMetric>;
+export type MappedMetrics = Record<keyof HostMetics, number | null | undefined>;
 
 export const useHostTable = (nodes: SnapshotNode[]) => {
-  const items: MappedMetrics[] = useMemo(() => {
-    return nodes.map(({ metrics, path }) => ({
-      ...last(path),
+  const items: HostNodeRow[] = useMemo(() => {
+    return nodes.map(({ metrics, path, name }) => ({
+      name,
+      os: last(path)?.os ?? '-',
       ...metrics.reduce((data, metric) => {
-        data[metric.name as keyof HostMetics] = metric;
+        data[metric.name as keyof HostMetics] =
+          metric.name === 'cpuCores' ? metric?.value : metric?.avg;
         return data;
-      }, {} as MappedMetrics),
+      }, {} as HostMetics),
     }));
   }, [nodes]);
 
