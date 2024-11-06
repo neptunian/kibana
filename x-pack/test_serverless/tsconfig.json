@@ -96,5 +96,6 @@
     "@kbn/ai-assistant-common",
     "@kbn/infra-plugin",
     "@kbn/observability-plugin",
+    "@kbn/data-usage-plugin",
   ]
 }
